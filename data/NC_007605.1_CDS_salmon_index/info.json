@@ -1,0 +1,22 @@
+{
+    "index_version": 4,
+    "reference_gfa": [
+        "data/NC_007605.1_CDS_salmon_index"
+    ],
+    "sampling_type": "dense",
+    "k": 31,
+    "num_kmers": 116420,
+    "num_contigs": 194,
+    "seq_length": 122240,
+    "have_ref_seq": true,
+    "have_edge_vec": false,
+    "SeqHash": "22bbb89217a2da25db4f3bdc64d74cde77d91963843270defc840fe807bf6318",
+    "NameHash": "39748cc6463b6ef0afb9bd43065c296df9054d58b6825c810266fd7133dc6de6",
+    "SeqHash512": "abdf129197f4d2331400c65e2db0d4f785cd055f8691604d1656215e47a92722668f38b47e65b1b47a01ed317714555035619f22fa8d93e7883759990a263993",
+    "NameHash512": "a9fa5ee51ba9732086a580b68331be5e7a7f3e27ddd4fa5c8d94a49b29f8ac38e94711088ec478e50e2e46fb68e3daf4521fbd4b1b8f2a78c69453311914421b",
+    "DecoySeqHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "DecoyNameHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    "num_decoys": 0,
+    "first_decoy_index": 18446744073709551615,
+    "keep_duplicates": false
+}

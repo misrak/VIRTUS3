@@ -1,0 +1,1 @@
+salmon index -t data/NC_007605.1_CDS_EBER12.fa -i data/NC_007605.1_CDS_EBER12_salmon_index -k 31
