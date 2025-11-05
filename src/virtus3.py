@@ -208,7 +208,7 @@ def pipeline(args):
             adata = sc.AnnData(X=np.array(mmread(f).todense()), obs=pd.read_csv(f_obs, header=None, index_col=0), var=pd.read_csv(f_var, header=None, index_col=0))
             # adata = sc.AnnData(mmread(f), pd.read_csv(f_obs, header=None, index_col=0), pd.read_csv(f_var, header=None, index_col=0))
             adata.obs.index.name = None
-            adata.obs.index  = adata.obs.index + '-' + str(int(lane))
+            adata.obs.index  = adata.obs.index + '-1'
             adata.var.index.name = None
 
             list_adata.append(adata)
