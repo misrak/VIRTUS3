@@ -226,7 +226,3 @@ For questions or issues:
 1. Check the log.txt file for error messages
 2. Verify all input files and reference paths
 3. Ensure all required tools (Cell Ranger, Salmon, SAMtools) are installed
-
-## License
-
-Specify your project's license here.
