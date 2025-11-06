@@ -5,7 +5,7 @@ VIRTUS3 is a specialized bioinformatics pipeline designed to detect viral sequen
 ## Overview
 
 ### Purpose
-VIRTUS3 enables the detection and quantification of viral transcripts in scRNA-seq experiments. We demonstrate that VIRTUS3 can be used for identification of cells infected with EBV and measures viral gene expression at single-cell resolution. Leverages Cell Ranger for human transcriptome analysis and cell identification, then quantifies unmapped reads against viral references. Only quantifies reads that failed to map to the human transcriptome, reducing the false positive originating from ambiguous reads similar to both human and viral genome. Also cellranger is not the best tool for assesing viral transcripts because they discard reads mapped to multiple genes and viral genomes are compact and has a lot of overlapped genes. VIRTUS3 overcome this by combining quasi-alignment for viral transcripts quantifications.
+VIRTUS3 enables the detection and quantification of viral transcripts in scRNA-seq experiments. For example, VIRTUS3 can be used to identify cells infected with EBV and also measure viral gene expression at single-cell resolution. It achieves this by leveraging Cell Ranger for human transcriptome analysis and cell identification, then quantifies unmapped reads against viral references. VIRTUS3 exclusively quantifies reads that do not align to the human transcriptome, thereby minimizing false positives arising from ambiguous reads with similarity to both human and viral genomes. Additionally, Cell Ranger is not optimal for assessing viral transcripts because it discards reads that map to multiple genes, whereas viral genomes are compact and extensively overlapping. VIRTUS3 overcomes this by using quasi-alignment to enable accurate viral transcript quantification.
 
 
 ## Input Requirements
@@ -25,12 +25,23 @@ All reference files for EBV are included in the `data/` directory:
   - 94 protein-coding genes (CDS)
   - 2 non-coding RNAs (EBER1 and EBER2)
   - EBV strain B95-8 (RefSeq: NC_007605.1)
+```
+>lcl|NC_007605.1_cds_YP_401631.1_1 [gene=LMP-2A] [locus_tag=EBV_gp110] [protein=latent_membrane_protein_2A]
+ATGAGTCTCGAAGCTCGCCTGATGAATGAAGACCTGGATTACGTAG...
+```
+
 - **Transcript-to-Gene Mapping**: `NC_007605.1_CDS_EBER12.tgMap.tsv`
   - Maps NCBI identifiers to human-readable gene names
+```
+lcl|NC_007605.1_cds_YP_401631.1_1	LMP-2A
+lcl|NC_007605.1_cds_YP_401633.1_1	LMP-1
+EBER1	EBER1
+EBER2	EBER2
+```
 - **Salmon Index**: `NC_007605.1_CDS_EBER12_salmon_index/`
   - Pre-built k-31 index for rapid quantification
 
-Users can also make a custom references.
+Users can also make their own custom references.
 
 ## Installation & Setup
 
@@ -65,13 +76,14 @@ The pipeline expects the 10x Genomics formatted human reference:
 - **File**: `refdata-gex-GRCh38-2024-A` etc. Available from 10x Genomics support website.
 
 
-## Installation
+### Installation
 
-### Option 1: Install from source (for command mode)
+#### Option 1: Install from source (for command mode)
 
 ```bash
+# Navigate to the VIRTUS3 directory
 git clone https://github.com/yyoshiaki/VIRTUS3.git
-cd VIRTUS3
+cd /path/to/VIRTUS3
 
 # Install in development mode (recommended for development)
 pip install -e .
@@ -80,7 +92,7 @@ pip install -e .
 pip install .
 ```
 
-### Option 2: No installation required (for script mode)
+#### Option 2: No installation required (for script mode)
 
 No installation needed - just ensure dependencies are available:
 - numpy>=1.20.0
@@ -115,10 +127,10 @@ virtus3 \
 
 ```bash
 # Check version
-python /vast/palmer/pi/hafler/hc865/VIRTUS3/src/virtus3.py --version
+python /path/to/VIRTUS3/src/virtus3.py --version
 
 # Run full pipeline
-python /vast/palmer/pi/hafler/hc865/VIRTUS3/src/virtus3.py \
+python /path/to/VIRTUS3/src/virtus3.py \
     --fastqs /path/to/fastqs \
     --chemistry_cr ARC-v1 \
     --sample SAMPLE_NAME \
@@ -242,43 +254,6 @@ print(adata.obs)  # Cell barcodes and metadata
 print(adata.var)  # EBV gene names
 ```
 
-## Data Formats
-
-### Input: FASTQ
-- Paired-end reads from 10x Chromium
-- R1: Cell barcode + UMI (typically 26bp for 3', 28bp for 5')
-- R2: cDNA transcript sequence
-
-### Reference: FASTA
-EBV coding sequences with structured headers:
-```
->lcl|NC_007605.1_cds_YP_401631.1_1 [gene=LMP-2A] [locus_tag=EBV_gp110] [protein=latent_membrane_protein_2A]
-ATGAGTCTCGAAGCTCGCCTGATGAATGAAGACCTGGATTACGTAG...
-```
-
-### Reference: tgMap (Transcript-to-Gene Mapping)
-Two-column TSV file mapping transcript identifiers to gene names:
-```
-lcl|NC_007605.1_cds_YP_401631.1_1	LMP-2A
-lcl|NC_007605.1_cds_YP_401633.1_1	LMP-1
-EBER1	EBER1
-EBER2	EBER2
-```
-
-### Output: AnnData H5AD
-HDF5-based single-cell data format used by scanpy:
-- `.X`: Sparse matrix of viral UMI counts (genes × cells)
-- `.obs`: DataFrame with cell barcodes and metadata
-- `.var`: DataFrame with EBV gene annotations
-- `.obs_names`: Cell barcodes (10x Chromium format)
-- `.var_names`: Gene names (human-readable)
-
-### Output: CSV
-Tab-separated matrix for compatibility with standard tools:
-- Header row: Cell barcodes
-- First column: Gene names
-- Values: UMI counts
-
 ## Troubleshooting
 
 ### Cell Ranger Fails
@@ -298,6 +273,7 @@ Manuscript is under preparation.
 ## Contact & Support
 
 For questions or issues:
-1. Check the log.txt file for error messages
-2. Verify all input files and reference paths
-3. Ensure all required tools (Cell Ranger, Salmon, SAMtools) are installed
+1. Check the log.txt file for error messages.
+2. Verify all input files and reference paths.
+3. Ensure all required tools (Cell Ranger, Salmon, SAMtools) are installed.
+4. Pray to the Omnissiah. 
