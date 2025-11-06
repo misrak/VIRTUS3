@@ -70,8 +70,8 @@ The pipeline expects the 10x Genomics formatted human reference:
 ### Option 1: Install from source (for command mode)
 
 ```bash
-# Navigate to the VIRTUS3 directory
-cd /vast/palmer/pi/hafler/hc865/VIRTUS3
+git clone https://github.com/yyoshiaki/VIRTUS3.git
+cd VIRTUS3
 
 # Install in development mode (recommended for development)
 pip install -e .
