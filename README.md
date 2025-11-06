@@ -64,6 +64,81 @@ pip install numpy pandas scipy scanpy
 The pipeline expects the 10x Genomics formatted human reference:
 - **File**: `refdata-gex-GRCh38-2024-A` etc. Available from 10x Genomics support website.
 
+
+## Installation
+
+### Option 1: Install from source (for command mode)
+
+```bash
+# Navigate to the VIRTUS3 directory
+cd /vast/palmer/pi/hafler/hc865/VIRTUS3
+
+# Install in development mode (recommended for development)
+pip install -e .
+
+# OR install normally
+pip install .
+```
+
+### Option 2: No installation required (for script mode)
+
+No installation needed - just ensure dependencies are available:
+- numpy>=1.20.0
+- pandas>=1.3.0
+- scipy>=1.7.0
+- scanpy>=1.8.0
+
+## Execution Modes
+
+### Mode 1: Command execution (after pip install)
+
+```bash
+# Check version
+virtus3 --version
+
+# Run full pipeline
+virtus3 \
+    --fastqs /path/to/fastqs \
+    --chemistry_cr ARC-v1 \
+    --sample SAMPLE_NAME \
+    --lib_alevin="-l ISR --chromiumV3" \
+    --output /path/to/output \
+    --index_human /path/to/human_index \
+    --index_virus /path/to/virus_index \
+    --tgMap /path/to/tgMap.tsv \
+    --cellranger /path/to/cellranger \
+    --salmon /path/to/salmon \
+    --cores 40
+```
+
+### Mode 2: Direct script execution (no installation)
+
+```bash
+# Check version
+python /vast/palmer/pi/hafler/hc865/VIRTUS3/src/virtus3.py --version
+
+# Run full pipeline
+python /vast/palmer/pi/hafler/hc865/VIRTUS3/src/virtus3.py \
+    --fastqs /path/to/fastqs \
+    --chemistry_cr ARC-v1 \
+    --sample SAMPLE_NAME \
+    --lib_alevin="-l ISR --chromiumV3" \
+    --output /path/to/output \
+    --index_human /path/to/human_index \
+    --index_virus /path/to/virus_index \
+    --tgMap /path/to/tgMap.tsv \
+    --cellranger /path/to/cellranger \
+    --salmon /path/to/salmon \
+    --cores 40
+```
+
+### Mode 3: Module execution (after pip install)
+
+```bash
+# This also works after installation
+python -m virtus3 --version
+```
+
 ## Usage
 
 ### Basic Command

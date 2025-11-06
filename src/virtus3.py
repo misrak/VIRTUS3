@@ -31,11 +31,23 @@ import datetime
 import re
 import sys
 import glob
-
 from scipy.io import mmread
 import pandas as pd
 import numpy as np
 import scanpy as sc
+
+# Handle imports for different execution modes
+try:
+    # When run as a package (virtus3 command or python -m virtus3)
+    from ._version import __version__
+except ImportError:
+    # When run as a script (python virtus3.py)
+    try:
+        from _version import __version__
+    except ImportError:
+        # Fallback if _version.py is not found
+        __version__ = "unknown"
+
 
 def run_command(command):
     print(command)
@@ -231,8 +243,25 @@ def pipeline(args):
     return log
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description='2step Cellranger, Alevin')
+def main(args=None):
+    """
+    Main entry point for VIRTUS3 pipeline.
+
+    Parameters
+    ----------
+    args : list, optional
+        Command line arguments. If None, uses sys.argv[1:].
+
+    Returns
+    -------
+    int
+        Exit code (0 for success, 1 for error)
+    """
+    parser = argparse.ArgumentParser(
+        prog='virtus3',
+        description='VIRTUS3: Detection of viral transcripts in single-cell RNA-seq data',
+        epilog='For more information, visit: https://github.com/yyoshiaki/VIRTUS3'
+    )
     parser.add_argument("--fastqs", type=str, help="input fastqs file for cellranger", required=True)
     parser.add_argument("--chemistry_cr", "-cc", type=str, help="chemistry for cellranger", required=True)
     parser.add_argument("--sample", "-s", type=str, help="sample name for cellranger", required=True)
@@ -246,24 +275,55 @@ if __name__ == "__main__":
     parser.add_argument("--samtools", "-sam", type=str, help="samtools path", required=False, default="samtools")
     parser.add_argument("--cores", "-p", type=int, help="number of cores", required=False, default=40)
     parser.add_argument("--skip_exist", "-skip", action='store_true', help="skip if output file exists", required=False, default=False)
+    parser.add_argument('-v', '--version', action='version', version=__version__, help='Show version and exit')
 
-    args = parser.parse_args()
-    args_txt = '\n'.join(f'{k}={v}' for k, v in vars(args).items())
+    try:
+        parsed_args = parser.parse_args(args)
+    except SystemExit as e:
+        # argparse calls sys.exit() on error or --help
+        return e.code if e.code else 0
+
+    args_txt = '\n'.join(f'{k}={v}' for k, v in vars(parsed_args).items())
     print(args_txt)
 
     log = str(datetime.datetime.now()) + '\n'
     log += '2step_cr_Alevin\n\n'
     log += '*****args*****\n' + args_txt + '\n'
 
-    for file in [args.fastqs, args.output, args.index_human, args.index_virus, args.tgMap, args.cellranger, args.salmon]:
+    # Validate that all paths are absolute
+    for file in [parsed_args.fastqs, parsed_args.output, parsed_args.index_human,
+                 parsed_args.index_virus, parsed_args.tgMap, parsed_args.cellranger,
+                 parsed_args.salmon]:
         if not os.path.isabs(file):
             print(f'Error: The path "{file}" is not an absolute path.')
-            sys.exit(1)
+            return 1
 
-    log += pipeline(args)
+    try:
+        log += pipeline(parsed_args)
+
+        with open(f"{parsed_args.output}/log.txt", mode='w') as f:
+            f.write(log)
+
+        print("Finished!")
+        return 0
+
+    except Exception as e:
+        print(f"ERROR: Pipeline failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
-    with open(f"{args.output}/log.txt", mode='w') as f:
-        f.write(log)
+def cli_main():
+    """
+    Entry point for installed command-line tool (virtus3 command).
 
-    print("Finished!")
+    This is the function that setuptools will call when the user runs
+    the 'virtus3' command after package installation via pip.
+    It simply wraps main() and ensures proper exit code handling.
+    """
+    sys.exit(main())
+
+
+if __name__ == "__main__":
+    sys.exit(main())

@@ -1,0 +1,77 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "virtus3"
+version = "0.0.1"
+description = "Detection of viral transcripts in single-cell RNA-seq data"
+readme = "README.md"
+authors = [
+    {name = "Yoshiaki Yasumizu", email = "yyasumizu@example.com"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+]
+keywords = ["bioinformatics", "single-cell", "RNA-seq", "viral", "transcriptomics"]
+requires-python = ">=3.8"
+
+# Dependencies
+dependencies = [
+    "numpy>=1.20.0",
+    "pandas>=1.3.0",
+    "scipy>=1.7.0",
+    "scanpy>=1.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=3.0",
+    "black>=22.0",
+    "flake8>=4.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/yyoshiaki/VIRTUS3"
+Documentation = "https://github.com/yyoshiaki/VIRTUS3/blob/main/README.md"
+Repository = "https://github.com/yyoshiaki/VIRTUS3"
+Issues = "https://github.com/yyoshiaki/VIRTUS3/issues"
+
+# Entry points - this is what enables the 'virtus3' command
+[project.scripts]
+virtus3 = "virtus3:cli_main"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["virtus3*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+virtus3 = ["*.txt", "*.tsv", "*.json"]
+
+# Black formatting configuration
+[tool.black]
+line-length = 100
+target-version = ['py38', 'py39', 'py310', 'py311']
+include = '\.pyi?$'
+
+# Pytest configuration
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "--verbose --cov=virtus3 --cov-report=term-missing"
