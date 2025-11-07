@@ -2,22 +2,22 @@
 # -*- coding: utf-8 -*-
 # @Author: yyasumizu
 # @Date: 2023-07-20
-# @Last Modified time: 2023-10-20
+# @Last Modified time: 2025-11-05
 
 
 """
 # specify all files in full path
-python pipeline.py \
-    --fastqs /home/yyasumizu/Yale/EBV/EBV_scRNAseq_pipeline/example/SRR16976513/fastq \
+python virtus3.py \
+    --fastqs /home/hc865/palmer_scratch/SRR16976513_data \
     --chemistry_cr ARC-v1 \
     --sample SRR16976513 \
     --lib_alevin="-l ISR --chromiumV3" \
-    --output /home/yyasumizu/Yale/EBV/EBV_scRNAseq_pipeline/example/SRR16976513/outputs/2step_cr_Alevin \
-    --index_human /home/yyasumizu/reference/refdata-gex-GRCh38-2020-A \
-    --index_virus /home/yyasumizu/Yale/EBV/EBV_scRNAseq_pipeline/2step_cr_Alevin/data/NC_007605.1_CDS_EBER12_salmon_index \
-    --tgMap /home/yyasumizu/Yale/EBV/EBV_scRNAseq_pipeline/2step_cr_Alevin/data/NC_007605.1_CDS_EBER12.tgMap.tsv \
-    --cellranger /home/yyasumizu/Programs/cellranger-7.1.0/cellranger \
-    --salmon /home/yyasumizu/Programs/salmon-latest_linux_x86_64/bin/salmon \
+    --output /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/test_output \
+    --index_human /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/data/refdata-gex-GRCh38-2024-A \
+    --index_virus /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/data/NC_007605.1_CDS_EBER12_salmon_index \
+    --tgMap /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/data/NC_007605.1_CDS_EBER12.tgMap.tsv \
+    --cellranger /vast/palmer/apps/avx2/software/CellRanger/9.0.1/cellranger \
+    --salmon /vast/palmer/apps/avx2/software/Salmon/1.4.0-gompi-2020b/bin/salmon \
     --cores 40
 
 # for 5'
@@ -31,15 +31,30 @@ import datetime
 import re
 import sys
 import glob
-
 from scipy.io import mmread
 import pandas as pd
 import numpy as np
 import scanpy as sc
 
+# Handle imports for different execution modes
+try:
+    # When run as a package (virtus3 command or python -m virtus3)
+    from ._version import __version__
+except ImportError:
+    # When run as a script (python virtus3.py)
+    try:
+        from _version import __version__
+    except ImportError:
+        # Fallback if _version.py is not found
+        __version__ = "unknown"
+
+
 def run_command(command):
     print(command)
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
+    if result.returncode != 0:
+        print(f"ERROR: Command failed with return code {result.returncode}")
+        print(f"stderr: {result.stderr}")
     return result.stdout
 
 def analyze_fastq_name(fastqs):
@@ -60,15 +75,15 @@ def analyze_fastq_name(fastqs):
                 list_attributes.append([sample_name, lane_number, filename, filename.replace("_R1_", "_R2_")])
 
         else:
-            raise Exception(f"Wired fastq name: {filename}") 
-        
+            raise Exception(f"Wired fastq name: {filename}")
+
     return list_attributes
 
 
 
 def pipeline(args):
     log = ""
-    
+
     # 0. examine input fastqs
     list_fastqs = os.listdir(args.fastqs)
 
@@ -115,12 +130,21 @@ def pipeline(args):
     else:
         print("skip samtools view (extract unmapped reads)")
 
+    # Validate that unmapped.bam is not empty
+    if os.path.getsize('./unmapped.bam') == 0:
+        print("WARNING: unmapped.bam is empty. This means no reads were unmapped (all reads mapped to human genome).")
+        print("No viral reads will be detected. This is expected if the sample has no viral content.")
+
     # os.makedirs("unmapped_fqs", exist_ok=True)
     command = f"{args.cellranger} bamtofastq --nthreads={args.cores} unmapped.bam unmapped_fqs"
     if (not args.skip_exist) or (not os.path.exists('./unmapped_fqs')):
         run_command(command)
     else:
         print("skip bamtofastq")
+
+    # Validate that bamtofastq produced output
+    if not os.path.exists('./unmapped_fqs'):
+        raise Exception("ERROR: bamtofastq failed to create unmapped_fqs directory. Check that unmapped.bam is a valid BAM file.")
 
     # 3. make barcode whitelist from cellranger output
     command = f"zcat raw_feature_bc_matrix/barcodes.tsv.gz | sed 's/-1//g' > raw_feature_bc_matrix/barcodes.tsv"
@@ -136,8 +160,16 @@ def pipeline(args):
     lanes = df_samples.loc[df_samples['sample_name']==args.sample, 'lane'].unique()
     list_unmapped_fqs_R1 = glob.glob('unmapped_fqs/*/*_R1_00*.fastq.gz')
     list_unmapped_fqs_R2 = glob.glob('unmapped_fqs/*/*_R2_00*.fastq.gz')
-    list_adata = []
 
+    # Validate that fastq files were found
+    if not list_unmapped_fqs_R1 or not list_unmapped_fqs_R2:
+        raise Exception(f"ERROR: No unmapped fastq files found. This could mean:\n"
+                       f"  1. The unmapped.bam file was empty (no unmapped reads)\n"
+                       f"  2. The glob pattern doesn't match the actual file names\n"
+                       f"  3. bamtofastq failed to create fastq files\n"
+                       f"Files found - R1: {list_unmapped_fqs_R1}\nFiles found - R2: {list_unmapped_fqs_R2}")
+
+    list_adata = []
 
     for lane in lanes:
         print(f"lane: {lane}")
@@ -165,7 +197,7 @@ def pipeline(args):
                             --whitelist raw_feature_bc_matrix/barcodes.tsv \
                             --dumpMtx
                         """
-            
+
         if (not args.skip_exist) or (not os.path.exists(f'alevin_virus_lane_{lane}/logs/salmon_quant.log')):
             run_command(command)
         else:
@@ -188,11 +220,11 @@ def pipeline(args):
             adata = sc.AnnData(X=np.array(mmread(f).todense()), obs=pd.read_csv(f_obs, header=None, index_col=0), var=pd.read_csv(f_var, header=None, index_col=0))
             # adata = sc.AnnData(mmread(f), pd.read_csv(f_obs, header=None, index_col=0), pd.read_csv(f_var, header=None, index_col=0))
             adata.obs.index.name = None
-            adata.obs.index  = adata.obs.index + '-' + str(int(lane))
+            adata.obs.index  = adata.obs.index + '-1'
             adata.var.index.name = None
 
             list_adata.append(adata)
-        
+
         else:
             print(f"no viral read was detected in lane {lane}")
 
@@ -201,7 +233,7 @@ def pipeline(args):
             adata = sc.AnnData(X=np.empty((0,df_var.shape[0])), var=df_var)
             adata.var.index.name = None
             list_adata.append(adata)
-    
+
     adata_concat = sc.concat(list_adata)
     adata_concat.to_df().to_csv(f_out_csv)
     adata_concat.write(f_out_h5ad)
@@ -211,8 +243,25 @@ def pipeline(args):
     return log
 
 
-if __name__ == "__main__": 
-    parser = argparse.ArgumentParser(description='2step Cellranger, Alevin')
+def main(args=None):
+    """
+    Main entry point for VIRTUS3 pipeline.
+
+    Parameters
+    ----------
+    args : list, optional
+        Command line arguments. If None, uses sys.argv[1:].
+
+    Returns
+    -------
+    int
+        Exit code (0 for success, 1 for error)
+    """
+    parser = argparse.ArgumentParser(
+        prog='virtus3',
+        description='VIRTUS3: Detection of viral transcripts in single-cell RNA-seq data',
+        epilog='For more information, visit: https://github.com/yyoshiaki/VIRTUS3'
+    )
     parser.add_argument("--fastqs", type=str, help="input fastqs file for cellranger", required=True)
     parser.add_argument("--chemistry_cr", "-cc", type=str, help="chemistry for cellranger", required=True)
     parser.add_argument("--sample", "-s", type=str, help="sample name for cellranger", required=True)
@@ -226,24 +275,55 @@ if __name__ == "__main__":
     parser.add_argument("--samtools", "-sam", type=str, help="samtools path", required=False, default="samtools")
     parser.add_argument("--cores", "-p", type=int, help="number of cores", required=False, default=40)
     parser.add_argument("--skip_exist", "-skip", action='store_true', help="skip if output file exists", required=False, default=False)
+    parser.add_argument('-v', '--version', action='version', version=__version__, help='Show version and exit')
 
-    args = parser.parse_args()
-    args_txt = '\n'.join(f'{k}={v}' for k, v in vars(args).items())
+    try:
+        parsed_args = parser.parse_args(args)
+    except SystemExit as e:
+        # argparse calls sys.exit() on error or --help
+        return e.code if e.code else 0
+
+    args_txt = '\n'.join(f'{k}={v}' for k, v in vars(parsed_args).items())
     print(args_txt)
 
     log = str(datetime.datetime.now()) + '\n'
     log += '2step_cr_Alevin\n\n'
     log += '*****args*****\n' + args_txt + '\n'
 
-    for file in [args.fastqs, args.output, args.index_human, args.index_virus, args.tgMap, args.cellranger, args.salmon]:
+    # Validate that all paths are absolute
+    for file in [parsed_args.fastqs, parsed_args.output, parsed_args.index_human,
+                 parsed_args.index_virus, parsed_args.tgMap, parsed_args.cellranger,
+                 parsed_args.salmon]:
         if not os.path.isabs(file):
             print(f'Error: The path "{file}" is not an absolute path.')
-            sys.exit(1)
+            return 1
 
-    log += pipeline(args)
+    try:
+        log += pipeline(parsed_args)
+
+        with open(f"{parsed_args.output}/log.txt", mode='w') as f:
+            f.write(log)
+
+        print("Finished!")
+        return 0
+
+    except Exception as e:
+        print(f"ERROR: Pipeline failed with exception: {e}")
+        import traceback
+        traceback.print_exc()
+        return 1
 
 
-    with open(f"{args.output}/log.txt", mode='w') as f:
-        f.write(log)
+def cli_main():
+    """
+    Entry point for installed command-line tool (virtus3 command).
 
-    print("finish!")
+    This is the function that setuptools will call when the user runs
+    the 'virtus3' command after package installation via pip.
+    It simply wraps main() and ensures proper exit code handling.
+    """
+    sys.exit(main())
+
+
+if __name__ == "__main__":
+    sys.exit(main())
