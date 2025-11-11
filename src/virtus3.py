@@ -40,21 +40,27 @@ import scanpy as sc
 try:
     # When run as a package (virtus3 command or python -m virtus3)
     from ._version import __version__
+    from .logger_config import setup_logger
 except ImportError:
     # When run as a script (python virtus3.py)
     try:
         from _version import __version__
+        from logger_config import setup_logger
     except ImportError:
         # Fallback if _version.py is not found
         __version__ = "unknown"
+        from logger_config import setup_logger
+
+# Initialize logger
+logger = setup_logger(__name__)
 
 
 def run_command(command):
-    print(command)
+    logger.info(f"Executing command: {command}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"ERROR: Command failed with return code {result.returncode}")
-        print(f"stderr: {result.stderr}")
+        logger.error(f"Command failed with return code {result.returncode}")
+        logger.error(f"stderr: {result.stderr}")
     return result.stdout
 
 def analyze_fastq_name(fastqs):
@@ -69,9 +75,9 @@ def analyze_fastq_name(fastqs):
             read_number = match.group(3)
 
             if read_number == "R1":
-                print("# samples")
-                print("Sample name: ", sample_name)
-                print("Lane number: ", lane_number)
+                logger.info("# samples")
+                logger.info(f"Sample name: {sample_name}")
+                logger.info(f"Lane number: {lane_number}")
                 list_attributes.append([sample_name, lane_number, filename, filename.replace("_R1_", "_R2_")])
 
         else:
@@ -90,8 +96,8 @@ def pipeline(args):
     # retain only fastq files
     list_fastqs = [x for x in list_fastqs if x.endswith(".fastq.gz")]
 
-    print(f'num fastqs: {len(list_fastqs)}')
-    print(f'fastqs: {list_fastqs}')
+    logger.info(f'num fastqs: {len(list_fastqs)}')
+    logger.info(f'fastqs: {list_fastqs}')
     df_samples = pd.DataFrame(analyze_fastq_name(list_fastqs), columns = ['sample_name', 'lane', 'file1', 'file2'])
 
     # 0. make output dir and change dir
@@ -101,7 +107,7 @@ def pipeline(args):
     # 1. cellranger count for human
     command = "cellranger --version"
     version = run_command(command)
-    print(version)
+    logger.info(f"CellRanger version: {version.strip()}")
 
     if int(version.split('-')[-1].split('.')[0]) >= 8:
         opt_createbam = "--create-bam=true"
@@ -119,7 +125,7 @@ def pipeline(args):
     if (not args.skip_exist) or (not os.path.exists('./cellranger_human/outs/possorted_genome_bam.bam')):
         run_command(command)
     else:
-        print("skip cellranger count")
+        logger.info("Skipping cellranger count (output already exists)")
 
     # 2. extract unmapped reads
     os.chdir("cellranger_human/outs")
@@ -128,19 +134,19 @@ def pipeline(args):
     if (not args.skip_exist) or (not os.path.exists('./unmapped.bam')):
         run_command(command)
     else:
-        print("skip samtools view (extract unmapped reads)")
+        logger.info("Skipping samtools view (unmapped.bam already exists)")
 
     # Validate that unmapped.bam is not empty
     if os.path.getsize('./unmapped.bam') == 0:
-        print("WARNING: unmapped.bam is empty. This means no reads were unmapped (all reads mapped to human genome).")
-        print("No viral reads will be detected. This is expected if the sample has no viral content.")
+        logger.warning("unmapped.bam is empty. This means no reads were unmapped (all reads mapped to human genome).")
+        logger.warning("No viral reads will be detected. This is expected if the sample has no viral content.")
 
     # os.makedirs("unmapped_fqs", exist_ok=True)
     command = f"{args.cellranger} bamtofastq --nthreads={args.cores} unmapped.bam unmapped_fqs"
     if (not args.skip_exist) or (not os.path.exists('./unmapped_fqs')):
         run_command(command)
     else:
-        print("skip bamtofastq")
+        logger.info("Skipping bamtofastq (unmapped_fqs already exists)")
 
     # Validate that bamtofastq produced output
     if not os.path.exists('./unmapped_fqs'):
@@ -151,7 +157,7 @@ def pipeline(args):
     if (not args.skip_exist) or (not os.path.exists('./raw_feature_bc_matrix/barcodes.tsv')):
         run_command(command)
     else:
-        print('skip make barcode whitelist')
+        logger.info('Skipping barcode whitelist creation (already exists)')
 
     # 4. Alevin (per lane)
     f_out_h5ad = f"{args.output}/alevin_virus.h5ad"
@@ -172,7 +178,7 @@ def pipeline(args):
     list_adata = []
 
     for lane in lanes:
-        print(f"lane: {lane}")
+        logger.info(f"Processing lane: {lane}")
         if len(lanes) == 1:
             command = f"""{args.salmon} alevin \
                             {args.lib_alevin} \
@@ -201,7 +207,7 @@ def pipeline(args):
         if (not args.skip_exist) or (not os.path.exists(f'alevin_virus_lane_{lane}/logs/salmon_quant.log')):
             run_command(command)
         else:
-            print(f"skip alevin for lane {lane}")
+            logger.info(f"Skipping alevin for lane {lane} (output already exists)")
 
         # parse salmon log
         f_salmon_log = f'alevin_virus_lane_{lane}/logs/salmon_quant.log'
@@ -212,7 +218,7 @@ def pipeline(args):
         is_finish = re.search(r'\[jointLog\] \[info\] finished quantifyLibrary\(\)', salmon_log) != None
 
         if is_finish & (num_reads > 0):
-            print(f"viral read was detected in lane {lane}, num reads: {num_reads}")
+            logger.info(f"Viral reads detected in lane {lane}, num reads: {num_reads}")
             # convert alevin output to h5ad
             f = f"alevin_virus_lane_{lane}/alevin/quants_mat.mtx.gz"
             f_obs = f"alevin_virus_lane_{lane}/alevin/quants_mat_rows.txt"
@@ -226,7 +232,7 @@ def pipeline(args):
             list_adata.append(adata)
 
         else:
-            print(f"no viral read was detected in lane {lane}")
+            logger.info(f"No viral reads detected in lane {lane}")
 
             f_var = f"alevin_virus_lane_{lane}/alevin/quants_mat_cols.txt"
             df_var = pd.read_csv(f_var, header=None, index_col=0)
@@ -238,7 +244,7 @@ def pipeline(args):
     adata_concat.to_df().to_csv(f_out_csv)
     adata_concat.write(f_out_h5ad)
     num_viral_reads = adata_concat.to_df().sum().sum()
-    print(f"Total num viral reads (UMIs): {num_viral_reads}")
+    logger.info(f"Total num viral reads (UMIs): {num_viral_reads}")
     log += f"Total num viral reads (UMIs): {num_viral_reads}"
     return log
 
@@ -284,7 +290,7 @@ def main(args=None):
         return e.code if e.code else 0
 
     args_txt = '\n'.join(f'{k}={v}' for k, v in vars(parsed_args).items())
-    print(args_txt)
+    logger.info(f"VIRTUS3 Arguments:\n{args_txt}")
 
     log = str(datetime.datetime.now()) + '\n'
     log += '2step_cr_Alevin\n\n'
@@ -295,7 +301,7 @@ def main(args=None):
                  parsed_args.index_virus, parsed_args.tgMap, parsed_args.cellranger,
                  parsed_args.salmon]:
         if not os.path.isabs(file):
-            print(f'Error: The path "{file}" is not an absolute path.')
+            logger.error(f'The path "{file}" is not an absolute path.')
             return 1
 
     try:
@@ -304,11 +310,11 @@ def main(args=None):
         with open(f"{parsed_args.output}/log.txt", mode='w') as f:
             f.write(log)
 
-        print("Finished!")
+        logger.info("Pipeline completed successfully!")
         return 0
 
     except Exception as e:
-        print(f"ERROR: Pipeline failed with exception: {e}")
+        logger.error(f"Pipeline failed with exception: {e}")
         import traceback
         traceback.print_exc()
         return 1
