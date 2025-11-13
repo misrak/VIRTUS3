@@ -56,10 +56,12 @@ logger = setup_logger(__name__)
 
 
 def run_command(command):
-    logger.info(f"Executing command: {command}")
+    compact_cmd = " ".join(command.split())
+    logger.info(f"Executing: {compact_cmd}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
         logger.error(f"Command failed with return code {result.returncode}")
+        logger.error(f"stdout: {result.stdout}")
         logger.error(f"stderr: {result.stderr}")
     return result.stdout
 
@@ -100,6 +102,16 @@ def pipeline(args):
     logger.info(f'fastqs: {list_fastqs}')
     df_samples = pd.DataFrame(analyze_fastq_name(list_fastqs), columns = ['sample_name', 'lane', 'file1', 'file2'])
 
+    # Filter and log files that will be processed for the specified sample
+    df_samples_filtered = df_samples[df_samples['sample_name'] == args.sample]
+    if len(df_samples_filtered) > 0:
+        logger.info(f"Files that will be processed for sample '{args.sample}':")
+        for _, row in df_samples_filtered.iterrows():
+            logger.info(f"  Lane {row['lane']}: {row['file1']}, {row['file2']}")
+    else:
+        logger.warning(f"No FASTQ files found matching sample name '{args.sample}'")
+        logger.warning(f"Available sample names: {df_samples['sample_name'].unique().tolist()}")
+
     # 0. make output dir and change dir
     os.makedirs(args.output, exist_ok=True)
     os.chdir(args.output)
@@ -120,7 +132,7 @@ def pipeline(args):
                     --transcriptome={args.index_human} \
                     --fastqs={args.fastqs} \
                     --sample={args.sample} \
-                    --localcores={args.cores} --localmem=64 \
+                    --localcores={args.cores} --localmem=640 \
                     --include-introns true {opt_createbam}"""
     if (not args.skip_exist) or (not os.path.exists('./cellranger_human/outs/possorted_genome_bam.bam')):
         run_command(command)
@@ -244,8 +256,15 @@ def pipeline(args):
     adata_concat.to_df().to_csv(f_out_csv)
     adata_concat.write(f_out_h5ad)
     num_viral_reads = adata_concat.to_df().sum().sum()
-    logger.info(f"Total num viral reads (UMIs): {num_viral_reads}")
-    log += f"Total num viral reads (UMIs): {num_viral_reads}"
+    total_umis = int(num_viral_reads)
+    logger.info(
+        f"Total viral UMIs across all lanes "
+        f"(from Alevin quants_mat, after whitelisting/filtering): {total_umis}"
+    )
+    log += (
+        f"Total viral UMIs across all lanes "
+        f"(from Alevin quants_mat, after whitelisting/filtering): {total_umis}\n"
+    )
     return log
 
 
