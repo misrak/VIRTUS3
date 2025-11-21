@@ -229,7 +229,7 @@ def pipeline(args):
         num_reads = int(num_reads.replace(",", ""))
         is_finish = re.search(r'\[jointLog\] \[info\] finished quantifyLibrary\(\)', salmon_log) != None
 
-        if is_finish & (num_reads > 0):
+        if is_finish and (num_reads > 0):
             logger.info(f"Viral reads detected in lane {lane}, num reads: {num_reads}")
             # convert alevin output to h5ad
             f = f"alevin_virus_lane_{lane}/alevin/quants_mat.mtx.gz"
@@ -253,9 +253,17 @@ def pipeline(args):
             list_adata.append(adata)
 
     adata_concat = sc.concat(list_adata)
-    adata_concat.to_df().to_csv(f_out_csv)
-    adata_concat.write(f_out_h5ad)
-    num_viral_reads = adata_concat.to_df().sum().sum()
+    # logging duplicated barcodes
+    dup_mask = adata_concat.obs_names.duplicated()
+    logger.info(f"Number of duplicated barcodes: {dup_mask.sum()}")
+    # aggregate duplicated barcodes 
+    df = adata_concat.to_df()               
+    df_agg = df.groupby(df.index).sum()     
+    adata_agg = sc.AnnData(df_agg)
+    adata_agg.var_names = df_agg.columns   
+    adata_agg.to_df().to_csv(f_out_csv)
+    adata_agg.write(f_out_h5ad)
+    num_viral_reads = adata_agg.to_df().sum().sum()
     total_umis = int(num_viral_reads)
     logger.info(
         f"Total viral UMIs across all lanes "
