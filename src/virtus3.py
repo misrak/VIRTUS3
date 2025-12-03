@@ -18,7 +18,8 @@ python virtus3.py \
     --tgMap /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/data/NC_007605.1_CDS_EBER12.tgMap.tsv \
     --cellranger /vast/palmer/apps/avx2/software/CellRanger/9.0.1/cellranger \
     --salmon /vast/palmer/apps/avx2/software/Salmon/1.4.0-gompi-2020b/bin/salmon \
-    --cores 40
+    --cores 40 \
+    --mem_per_core 20
 
 # for 5'
     --lib_alevin="-l ISF --umiLength 10 --barcodeLength 16 --end 5" \
@@ -38,16 +39,13 @@ import scanpy as sc
 
 # Handle imports for different execution modes
 try:
-    # When run as a package (virtus3 command or python -m virtus3)
     from ._version import __version__
     from .logger_config import setup_logger
 except ImportError:
-    # When run as a script (python virtus3.py)
     try:
         from _version import __version__
         from logger_config import setup_logger
     except ImportError:
-        # Fallback if _version.py is not found
         __version__ = "unknown"
         from logger_config import setup_logger
 
@@ -77,9 +75,6 @@ def analyze_fastq_name(fastqs):
             read_number = match.group(3)
 
             if read_number == "R1":
-                logger.info("# samples")
-                logger.info(f"Sample name: {sample_name}")
-                logger.info(f"Lane number: {lane_number}")
                 list_attributes.append([sample_name, lane_number, filename, filename.replace("_R1_", "_R2_")])
 
         else:
@@ -87,6 +82,42 @@ def analyze_fastq_name(fastqs):
 
     return list_attributes
 
+
+def get_memory_gb(mem_arg, cores, safety_margin=0.95):
+    """
+    Get total memory in GB based on user argument.
+    
+    Args:
+        mem_arg: Memory per core in GB, or -1 for auto-detection
+        cores: Number of cores requested
+        safety_margin: Fraction of detected memory to use (only for auto)
+    """
+    if mem_arg > 0:
+        return mem_arg * cores
+    
+    allocated = None
+    
+    # SLURM detection
+    if 'SLURM_JOB_ID' in os.environ:
+        if 'SLURM_MEM_PER_CPU' in os.environ:
+            mem_per_cpu_mb = int(os.environ['SLURM_MEM_PER_CPU'])
+            cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+            allocated = (mem_per_cpu_mb * cpus) // 1024 
+        elif 'SLURM_MEM_PER_NODE' in os.environ:
+            allocated = int(os.environ['SLURM_MEM_PER_NODE']) // 1024
+    
+    # Fallback: local machine
+    if allocated is None:
+        try:
+            import psutil
+            allocated = psutil.virtual_memory().available // (1024 ** 3)
+        except ImportError:
+            raise ImportError(
+                "psutil is required for auto memory detection outside SLURM. "
+                "Install it with 'conda install psutil' or specify --mem_per_core explicitly."
+            )
+    
+    return int(allocated * safety_margin)
 
 
 def pipeline(args):
@@ -98,8 +129,6 @@ def pipeline(args):
     # retain only fastq files
     list_fastqs = [x for x in list_fastqs if x.endswith(".fastq.gz")]
 
-    logger.info(f'num fastqs: {len(list_fastqs)}')
-    logger.info(f'fastqs: {list_fastqs}')
     df_samples = pd.DataFrame(analyze_fastq_name(list_fastqs), columns = ['sample_name', 'lane', 'file1', 'file2'])
 
     # Filter and log files that will be processed for the specified sample
@@ -126,13 +155,16 @@ def pipeline(args):
     else:
         opt_createbam = ""
 
+    memsize = get_memory_gb(args.mem_per_core, args.cores, 0.95)
+    logger.info(f"Using {memsize} GB for cellranger count")
+
     command = f"""{args.cellranger} count \
                     --id=cellranger_human \
                     --chemistry={args.chemistry_cr} \
                     --transcriptome={args.index_human} \
                     --fastqs={args.fastqs} \
                     --sample={args.sample} \
-                    --localcores={args.cores} --localmem=640 \
+                    --localcores={args.cores} --localmem={memsize} \
                     --include-introns true {opt_createbam}"""
     if (not args.skip_exist) or (not os.path.exists('./cellranger_human/outs/possorted_genome_bam.bam')):
         run_command(command)
@@ -189,8 +221,8 @@ def pipeline(args):
 
     list_adata = []
 
-    for lane in lanes:
-        logger.info(f"Processing lane: {lane}")
+    for i, lane in enumerate(lanes):
+        logger.info(f"Processing lane: {lane} ({i+1}/{len(lanes)})")
         if len(lanes) == 1:
             command = f"""{args.salmon} alevin \
                             {args.lib_alevin} \
@@ -204,6 +236,13 @@ def pipeline(args):
                             --dumpMtx
                         """
         else:
+            r1_files = [x for x in list_unmapped_fqs_R1 if x.split('_')[-3] == 'L'+lane]
+            r2_files = [x for x in list_unmapped_fqs_R2 if x.split('_')[-3] == 'L'+lane]
+            logger.info(f"R1 files for lane {lane}: {r1_files}")
+            logger.info(f"R2 files for lane {lane}: {r2_files}")
+            remaining = lanes[i:]
+            logger.info(f"Processing lane: {lane}")
+            # logger.info(f"Remaining lanes: {list(remaining)}")
             command = f"""{args.salmon} alevin \
                             {args.lib_alevin} \
                             -1 {' '.join([x for x in list_unmapped_fqs_R1 if x.split('_')[-3] == 'L'+lane])} \
@@ -307,6 +346,7 @@ def main(args=None):
     parser.add_argument("--salmon", "-sl", type=str, help="salmon path", required=False, default="salmon")
     parser.add_argument("--samtools", "-sam", type=str, help="samtools path", required=False, default="samtools")
     parser.add_argument("--cores", "-p", type=int, help="number of cores", required=False, default=40)
+    parser.add_argument("--mem_per_core", "-m", type=int, help="Memory per core in GB, or -1 to auto-detect from SLURM/system (default: -1)", required=False, default=-1)
     parser.add_argument("--skip_exist", "-skip", action='store_true', help="skip if output file exists", required=False, default=False)
     parser.add_argument('-v', '--version', action='version', version=__version__, help='Show version and exit')
 
