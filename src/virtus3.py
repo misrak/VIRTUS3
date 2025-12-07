@@ -18,7 +18,8 @@ python virtus3.py \
     --tgMap /gpfs/gibbs/pi/hafler/hc865/VIRTUS3/data/NC_007605.1_CDS_EBER12.tgMap.tsv \
     --cellranger /vast/palmer/apps/avx2/software/CellRanger/9.0.1/cellranger \
     --salmon /vast/palmer/apps/avx2/software/Salmon/1.4.0-gompi-2020b/bin/salmon \
-    --cores 40
+    --cores 40 \
+    --mem_per_core 20
 
 # for 5'
     --lib_alevin="-l ISF --umiLength 10 --barcodeLength 16 --end 5" \
@@ -38,23 +39,28 @@ import scanpy as sc
 
 # Handle imports for different execution modes
 try:
-    # When run as a package (virtus3 command or python -m virtus3)
     from ._version import __version__
+    from .logger_config import setup_logger
 except ImportError:
-    # When run as a script (python virtus3.py)
     try:
         from _version import __version__
+        from logger_config import setup_logger
     except ImportError:
-        # Fallback if _version.py is not found
         __version__ = "unknown"
+        from logger_config import setup_logger
+
+# Initialize logger
+logger = setup_logger(__name__)
 
 
 def run_command(command):
-    print(command)
+    compact_cmd = " ".join(command.split())
+    logger.info(f"Executing: {compact_cmd}")
     result = subprocess.run(command, shell=True, capture_output=True, text=True)
     if result.returncode != 0:
-        print(f"ERROR: Command failed with return code {result.returncode}")
-        print(f"stderr: {result.stderr}")
+        logger.error(f"Command failed with return code {result.returncode}")
+        logger.error(f"stdout: {result.stdout}")
+        logger.error(f"stderr: {result.stderr}")
     return result.stdout
 
 def analyze_fastq_name(fastqs):
@@ -69,9 +75,6 @@ def analyze_fastq_name(fastqs):
             read_number = match.group(3)
 
             if read_number == "R1":
-                print("# samples")
-                print("Sample name: ", sample_name)
-                print("Lane number: ", lane_number)
                 list_attributes.append([sample_name, lane_number, filename, filename.replace("_R1_", "_R2_")])
 
         else:
@@ -79,6 +82,42 @@ def analyze_fastq_name(fastqs):
 
     return list_attributes
 
+
+def get_memory_gb(mem_arg, cores, safety_margin=0.95):
+    """
+    Get total memory in GB based on user argument.
+    
+    Args:
+        mem_arg: Memory per core in GB, or -1 for auto-detection
+        cores: Number of cores requested
+        safety_margin: Fraction of detected memory to use (only for auto)
+    """
+    if mem_arg > 0:
+        return mem_arg * cores
+    
+    allocated = None
+    
+    # SLURM detection
+    if 'SLURM_JOB_ID' in os.environ:
+        if 'SLURM_MEM_PER_CPU' in os.environ:
+            mem_per_cpu_mb = int(os.environ['SLURM_MEM_PER_CPU'])
+            cpus = int(os.environ.get('SLURM_CPUS_PER_TASK', 1))
+            allocated = (mem_per_cpu_mb * cpus) // 1024 
+        elif 'SLURM_MEM_PER_NODE' in os.environ:
+            allocated = int(os.environ['SLURM_MEM_PER_NODE']) // 1024
+    
+    # Fallback: local machine
+    if allocated is None:
+        try:
+            import psutil
+            allocated = psutil.virtual_memory().available // (1024 ** 3)
+        except ImportError:
+            raise ImportError(
+                "psutil is required for auto memory detection outside SLURM. "
+                "Install it with 'conda install psutil' or specify --mem_per_core explicitly."
+            )
+    
+    return int(allocated * safety_margin)
 
 
 def pipeline(args):
@@ -90,9 +129,17 @@ def pipeline(args):
     # retain only fastq files
     list_fastqs = [x for x in list_fastqs if x.endswith(".fastq.gz")]
 
-    print(f'num fastqs: {len(list_fastqs)}')
-    print(f'fastqs: {list_fastqs}')
     df_samples = pd.DataFrame(analyze_fastq_name(list_fastqs), columns = ['sample_name', 'lane', 'file1', 'file2'])
+
+    # Filter and log files that will be processed for the specified sample
+    df_samples_filtered = df_samples[df_samples['sample_name'] == args.sample]
+    if len(df_samples_filtered) > 0:
+        logger.info(f"Files that will be processed for sample '{args.sample}':")
+        for _, row in df_samples_filtered.iterrows():
+            logger.info(f"  Lane {row['lane']}: {row['file1']}, {row['file2']}")
+    else:
+        logger.warning(f"No FASTQ files found matching sample name '{args.sample}'")
+        logger.warning(f"Available sample names: {df_samples['sample_name'].unique().tolist()}")
 
     # 0. make output dir and change dir
     os.makedirs(args.output, exist_ok=True)
@@ -101,12 +148,15 @@ def pipeline(args):
     # 1. cellranger count for human
     command = "cellranger --version"
     version = run_command(command)
-    print(version)
+    logger.info(f"CellRanger version: {version.strip()}")
 
     if int(version.split('-')[-1].split('.')[0]) >= 8:
         opt_createbam = "--create-bam=true"
     else:
         opt_createbam = ""
+
+    memsize = get_memory_gb(args.mem_per_core, args.cores, 0.95)
+    logger.info(f"Using {memsize} GB for cellranger count")
 
     command = f"""{args.cellranger} count \
                     --id=cellranger_human \
@@ -114,12 +164,12 @@ def pipeline(args):
                     --transcriptome={args.index_human} \
                     --fastqs={args.fastqs} \
                     --sample={args.sample} \
-                    --localcores={args.cores} --localmem=64 \
+                    --localcores={args.cores} --localmem={memsize} \
                     --include-introns true {opt_createbam}"""
     if (not args.skip_exist) or (not os.path.exists('./cellranger_human/outs/possorted_genome_bam.bam')):
         run_command(command)
     else:
-        print("skip cellranger count")
+        logger.info("Skipping cellranger count (output already exists)")
 
     # 2. extract unmapped reads
     os.chdir("cellranger_human/outs")
@@ -128,19 +178,19 @@ def pipeline(args):
     if (not args.skip_exist) or (not os.path.exists('./unmapped.bam')):
         run_command(command)
     else:
-        print("skip samtools view (extract unmapped reads)")
+        logger.info("Skipping samtools view (unmapped.bam already exists)")
 
     # Validate that unmapped.bam is not empty
     if os.path.getsize('./unmapped.bam') == 0:
-        print("WARNING: unmapped.bam is empty. This means no reads were unmapped (all reads mapped to human genome).")
-        print("No viral reads will be detected. This is expected if the sample has no viral content.")
+        logger.warning("unmapped.bam is empty. This means no reads were unmapped (all reads mapped to human genome).")
+        logger.warning("No viral reads will be detected. This is expected if the sample has no viral content.")
 
     # os.makedirs("unmapped_fqs", exist_ok=True)
     command = f"{args.cellranger} bamtofastq --nthreads={args.cores} unmapped.bam unmapped_fqs"
     if (not args.skip_exist) or (not os.path.exists('./unmapped_fqs')):
         run_command(command)
     else:
-        print("skip bamtofastq")
+        logger.info("Skipping bamtofastq (unmapped_fqs already exists)")
 
     # Validate that bamtofastq produced output
     if not os.path.exists('./unmapped_fqs'):
@@ -151,7 +201,7 @@ def pipeline(args):
     if (not args.skip_exist) or (not os.path.exists('./raw_feature_bc_matrix/barcodes.tsv')):
         run_command(command)
     else:
-        print('skip make barcode whitelist')
+        logger.info('Skipping barcode whitelist creation (already exists)')
 
     # 4. Alevin (per lane)
     f_out_h5ad = f"{args.output}/alevin_virus.h5ad"
@@ -171,8 +221,8 @@ def pipeline(args):
 
     list_adata = []
 
-    for lane in lanes:
-        print(f"lane: {lane}")
+    for i, lane in enumerate(lanes):
+        logger.info(f"Processing lane: {lane} ({i+1}/{len(lanes)})")
         if len(lanes) == 1:
             command = f"""{args.salmon} alevin \
                             {args.lib_alevin} \
@@ -186,6 +236,13 @@ def pipeline(args):
                             --dumpMtx
                         """
         else:
+            r1_files = [x for x in list_unmapped_fqs_R1 if x.split('_')[-3] == 'L'+lane]
+            r2_files = [x for x in list_unmapped_fqs_R2 if x.split('_')[-3] == 'L'+lane]
+            logger.info(f"R1 files for lane {lane}: {r1_files}")
+            logger.info(f"R2 files for lane {lane}: {r2_files}")
+            remaining = lanes[i:]
+            logger.info(f"Processing lane: {lane}")
+            # logger.info(f"Remaining lanes: {list(remaining)}")
             command = f"""{args.salmon} alevin \
                             {args.lib_alevin} \
                             -1 {' '.join([x for x in list_unmapped_fqs_R1 if x.split('_')[-3] == 'L'+lane])} \
@@ -201,7 +258,7 @@ def pipeline(args):
         if (not args.skip_exist) or (not os.path.exists(f'alevin_virus_lane_{lane}/logs/salmon_quant.log')):
             run_command(command)
         else:
-            print(f"skip alevin for lane {lane}")
+            logger.info(f"Skipping alevin for lane {lane} (output already exists)")
 
         # parse salmon log
         f_salmon_log = f'alevin_virus_lane_{lane}/logs/salmon_quant.log'
@@ -211,8 +268,8 @@ def pipeline(args):
         num_reads = int(num_reads.replace(",", ""))
         is_finish = re.search(r'\[jointLog\] \[info\] finished quantifyLibrary\(\)', salmon_log) != None
 
-        if is_finish & (num_reads > 0):
-            print(f"viral read was detected in lane {lane}, num reads: {num_reads}")
+        if is_finish and (num_reads > 0):
+            logger.info(f"Viral reads detected in lane {lane}, num reads: {num_reads}")
             # convert alevin output to h5ad
             f = f"alevin_virus_lane_{lane}/alevin/quants_mat.mtx.gz"
             f_obs = f"alevin_virus_lane_{lane}/alevin/quants_mat_rows.txt"
@@ -226,7 +283,7 @@ def pipeline(args):
             list_adata.append(adata)
 
         else:
-            print(f"no viral read was detected in lane {lane}")
+            logger.info(f"No viral reads detected in lane {lane}")
 
             f_var = f"alevin_virus_lane_{lane}/alevin/quants_mat_cols.txt"
             df_var = pd.read_csv(f_var, header=None, index_col=0)
@@ -235,11 +292,26 @@ def pipeline(args):
             list_adata.append(adata)
 
     adata_concat = sc.concat(list_adata)
-    adata_concat.to_df().to_csv(f_out_csv)
-    adata_concat.write(f_out_h5ad)
-    num_viral_reads = adata_concat.to_df().sum().sum()
-    print(f"Total num viral reads (UMIs): {num_viral_reads}")
-    log += f"Total num viral reads (UMIs): {num_viral_reads}"
+    # logging duplicated barcodes
+    dup_mask = adata_concat.obs_names.duplicated()
+    logger.info(f"Number of duplicated barcodes: {dup_mask.sum()}")
+    # aggregate duplicated barcodes 
+    df = adata_concat.to_df()               
+    df_agg = df.groupby(df.index).sum()     
+    adata_agg = sc.AnnData(df_agg)
+    adata_agg.var_names = df_agg.columns   
+    adata_agg.to_df().to_csv(f_out_csv)
+    adata_agg.write(f_out_h5ad)
+    num_viral_reads = adata_agg.to_df().sum().sum()
+    total_umis = int(num_viral_reads)
+    logger.info(
+        f"Total viral UMIs across all lanes "
+        f"(from Alevin quants_mat, after whitelisting/filtering): {total_umis}"
+    )
+    log += (
+        f"Total viral UMIs across all lanes "
+        f"(from Alevin quants_mat, after whitelisting/filtering): {total_umis}\n"
+    )
     return log
 
 
@@ -274,6 +346,7 @@ def main(args=None):
     parser.add_argument("--salmon", "-sl", type=str, help="salmon path", required=False, default="salmon")
     parser.add_argument("--samtools", "-sam", type=str, help="samtools path", required=False, default="samtools")
     parser.add_argument("--cores", "-p", type=int, help="number of cores", required=False, default=40)
+    parser.add_argument("--mem_per_core", "-m", type=int, help="Memory per core in GB, or -1 to auto-detect from SLURM/system (default: -1)", required=False, default=-1)
     parser.add_argument("--skip_exist", "-skip", action='store_true', help="skip if output file exists", required=False, default=False)
     parser.add_argument('-v', '--version', action='version', version=__version__, help='Show version and exit')
 
@@ -284,7 +357,7 @@ def main(args=None):
         return e.code if e.code else 0
 
     args_txt = '\n'.join(f'{k}={v}' for k, v in vars(parsed_args).items())
-    print(args_txt)
+    logger.info(f"VIRTUS3 Arguments:\n{args_txt}")
 
     log = str(datetime.datetime.now()) + '\n'
     log += '2step_cr_Alevin\n\n'
@@ -295,7 +368,7 @@ def main(args=None):
                  parsed_args.index_virus, parsed_args.tgMap, parsed_args.cellranger,
                  parsed_args.salmon]:
         if not os.path.isabs(file):
-            print(f'Error: The path "{file}" is not an absolute path.')
+            logger.error(f'The path "{file}" is not an absolute path.')
             return 1
 
     try:
@@ -304,11 +377,11 @@ def main(args=None):
         with open(f"{parsed_args.output}/log.txt", mode='w') as f:
             f.write(log)
 
-        print("Finished!")
+        logger.info("Pipeline completed successfully!")
         return 0
 
     except Exception as e:
-        print(f"ERROR: Pipeline failed with exception: {e}")
+        logger.error(f"Pipeline failed with exception: {e}")
         import traceback
         traceback.print_exc()
         return 1
